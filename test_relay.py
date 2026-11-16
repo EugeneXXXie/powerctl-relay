@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from relay import handle_request, hash_password, magic_packet
+from relay import AuthGuard, handle_request, hash_password, magic_packet
 
 
 class RelayTest(unittest.TestCase):
@@ -18,7 +18,7 @@ class RelayTest(unittest.TestCase):
         ]
         self.sent = []
 
-    def handle(self, method, path, headers, body=None, health=None):
+    def handle(self, method, path, headers, body=None, health=None, guard=None):
         return handle_request(
             method,
             path,
@@ -29,6 +29,7 @@ class RelayTest(unittest.TestCase):
             probe_health=health or (lambda machine: {"ok": True, "os": "windows"}),
             send_magic=lambda mac: self.sent.append(("wol", mac)),
             send_shutdown=lambda machine: self.sent.append(("off", machine["id"])),
+            guard=guard,
         )
 
     def test_status_uses_agent_health(self):
@@ -74,6 +75,18 @@ class RelayTest(unittest.TestCase):
         )
         self.assertEqual(200, status)
         self.assertEqual([("off", "desktop")], self.sent)
+
+    def test_repeated_wrong_passwords_lock_power_actions(self):
+        guard = AuthGuard(limit=2, lock_seconds=60, now=lambda: 1000)
+        wrong = {"Authorization": "Bearer no"}
+        right = {"Authorization": "Bearer secret"}
+        body = json.dumps({"id": "desktop", "action": "on"})
+        self.assertEqual(401, self.handle("POST", "/power", wrong, body, guard=guard)[0])
+        self.assertEqual(401, self.handle("POST", "/power", wrong, body, guard=guard)[0])
+        self.assertEqual([], self.sent)
+        status, _ = self.handle("POST", "/power", right, body, guard=guard)
+        self.assertEqual(429, status)
+        self.assertEqual([], self.sent)
 
 
 if __name__ == "__main__":

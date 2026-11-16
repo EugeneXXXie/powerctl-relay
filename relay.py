@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import sys
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,9 +37,35 @@ def magic_packet(mac):
     return b"\xff" * 6 + hardware * 16
 
 
-def handle_request(method, path, headers, body, password_hash, machines, probe_health, send_magic, send_shutdown):
+class AuthGuard:
+    def __init__(self, limit=5, lock_seconds=300, now=None):
+        self.limit = limit
+        self.lock_seconds = lock_seconds
+        self.now = now or time.time
+        self.failures = 0
+        self.locked_until = 0
+
+    def locked(self):
+        return self.now() < self.locked_until
+
+    def fail(self):
+        self.failures += 1
+        if self.failures >= self.limit:
+            self.locked_until = self.now() + self.lock_seconds
+            self.failures = 0
+
+    def succeed(self):
+        self.failures = 0
+
+
+def handle_request(method, path, headers, body, password_hash, machines, probe_health, send_magic, send_shutdown, guard=None):
+    guard = guard or AuthGuard()
+    if guard.locked():
+        return 429, json.dumps({"ok": False})
     if not _authorized(headers, password_hash):
+        guard.fail()
         return 401, json.dumps({"ok": False})
+    guard.succeed()
     if method == "GET" and path == "/status":
         return 200, json.dumps({"machines": [_status(machine, probe_health) for machine in machines]})
     if method == "POST" and path == "/power":
@@ -127,6 +154,8 @@ def load_config(path):
 
 
 def serve(config):
+    guard = AuthGuard()
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             self._dispatch(None)
@@ -147,6 +176,7 @@ def serve(config):
                 probe_health,
                 send_magic,
                 send_shutdown,
+                guard,
             )
             encoded = payload.encode("utf-8")
             self.send_response(status)
@@ -155,8 +185,12 @@ def serve(config):
             self.end_headers()
             self.wfile.write(encoded)
 
+        def log_request(self, code="-", size="-"):
+            path = self.path.split("?", 1)[0]
+            sys.stderr.write("%s %s %s\n" % (self.command, path, code))
+
         def log_message(self, fmt, *args):
-            sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))
+            return
 
     server = ThreadingHTTPServer((config.get("listen", "0.0.0.0"), int(config.get("port", 8787))), Handler)
     print("relay listening on %s:%s" % (config.get("listen", "0.0.0.0"), config.get("port", 8787)))
