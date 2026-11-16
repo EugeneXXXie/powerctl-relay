@@ -1,0 +1,7 @@
+services:
+  power-relay:
+    build: .
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ${POWER_RELAY_DATA:-./data}:/data

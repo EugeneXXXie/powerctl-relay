@@ -1,0 +1,14 @@
+{
+  "listen": "0.0.0.0",
+  "port": 8787,
+  "password_hash": "change-me",
+  "machines": [
+    {
+      "id": "desktop",
+      "name": "台式机",
+      "mac": "AA:BB:CC:DD:EE:FF",
+      "agent_url": "http://192.0.2.10:8790",
+      "agent_secret": "change-me"
+    }
+  ]
+}
